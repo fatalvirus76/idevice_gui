@@ -16,7 +16,8 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTabWidget, QGridLayout, QGroupBox, QLabel, QLineEdit,
     QCheckBox, QComboBox, QTextEdit, QFileDialog, QRadioButton,
-    QStatusBar, QProgressBar, QMessageBox, QSplitter, QAction, QActionGroup, QMenu
+    QStatusBar, QProgressBar, QMessageBox, QSplitter, QAction, QActionGroup,
+    QMenu, QTabBar, QStyle
 )
 from PyQt5.QtGui import QFont, QIcon, QTextCursor
 from PyQt5.QtCore import QProcess, Qt, QSize, QSettings
@@ -60,8 +61,8 @@ class IdeviceGUITool(QMainWindow):
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
-        self.main_layout.setContentsMargins(10, 10, 10, 10)
-        self.main_layout.setSpacing(10)
+        self.main_layout.setContentsMargins(8, 8, 8, 8)
+        self.main_layout.setSpacing(6)
         
         # --- Menu Bar ---
         self.create_menu()
@@ -88,6 +89,13 @@ class IdeviceGUITool(QMainWindow):
         controls_layout.setContentsMargins(0,0,0,0)
         
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setElideMode(Qt.ElideRight)
+        self.tabs.setIconSize(QSize(18, 18))
+        self.tabs.tabBar().setExpanding(False)
+        self.tabs.tabBar().setUsesScrollButtons(True)
+        self.tabs.tabBar().setMinimumHeight(30)
         self.tabs.currentChanged.connect(self.update_ui_for_current_tab)
         controls_layout.addWidget(self.tabs)
         
@@ -97,6 +105,8 @@ class IdeviceGUITool(QMainWindow):
         output_layout.setContentsMargins(0,0,0,0)
         self.output_group = QGroupBox()
         self.output_group_layout = QVBoxLayout(self.output_group)
+        self.output_group_layout.setContentsMargins(6, 6, 6, 6)
+        self.output_group_layout.setSpacing(5)
         
         self.command_display = QLineEdit()
         self.command_display.setReadOnly(True)
@@ -124,7 +134,10 @@ class IdeviceGUITool(QMainWindow):
         
         main_splitter.addWidget(controls_widget)
         main_splitter.addWidget(output_widget)
-        main_splitter.setSizes([450, 350])
+        main_splitter.setStretchFactor(0, 1)
+        main_splitter.setStretchFactor(1, 0)
+        # Keep the console useful without letting it push the active tool below the screen.
+        main_splitter.setSizes([max(360, self.height() - 250), 190])
 
         # --- Status Bar ---
         self.status_bar = QStatusBar()
@@ -185,6 +198,12 @@ class IdeviceGUITool(QMainWindow):
         self.lang_menu.addAction(en_action)
         lang_group.addAction(sv_action)
         lang_group.addAction(en_action)
+
+        self.save_output_action = QAction(self._get_icon("save"), "", self)
+        self.save_output_action.triggered.connect(self.save_output_to_file)
+        self.view_menu.addSeparator()
+        self.view_menu.addAction(self.save_output_action)
+
         if self.current_lang == "sv": sv_action.setChecked(True)
         else: en_action.setChecked(True)
 
@@ -209,7 +228,16 @@ class IdeviceGUITool(QMainWindow):
         icon_map = {"phone": "smartphone", "run": "media-playback-start", "abort": "process-stop", "refresh": "view-refresh", "copy": "edit-copy", "clear": "edit-clear", "save": "document-save", "info": "help-about"}
         if QIcon.hasThemeIcon(name): return QIcon.fromTheme(name)
         if name in icon_map and QIcon.hasThemeIcon(icon_map[name]): return QIcon.fromTheme(icon_map[name])
-        return QIcon()
+        fallback = {
+            "phone": QStyle.SP_ComputerIcon,
+            "info": QStyle.SP_MessageBoxInformation,
+            "run": QStyle.SP_MediaPlay,
+            "abort": QStyle.SP_MediaStop,
+            "refresh": QStyle.SP_BrowserReload,
+            "save": QStyle.SP_DialogSaveButton,
+            "clear": QStyle.SP_DialogResetButton,
+        }
+        return self.style().standardIcon(fallback.get(name, QStyle.SP_FileIcon))
 
     def closeEvent(self, event):
         self.settings.setValue("size", self.size())
@@ -219,8 +247,19 @@ class IdeviceGUITool(QMainWindow):
         super().closeEvent(event)
         
     def load_settings(self):
-        self.resize(self.settings.value("size", QSize(1200, 900)))
-        self.move(self.settings.value("pos", self.pos()))
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        # Start at the requested working size on every launch.
+        start_size = QSize(1280, 720)
+        if available:
+            width = min(start_size.width(), available.width() - 24)
+            height = min(start_size.height(), available.height() - 24)
+            self.resize(width, height)
+            self.move(available.left() + (available.width() - width) // 2,
+                      available.top() + (available.height() - height) // 2)
+        else:
+            self.resize(start_size)
+
         saved_theme = self.settings.value("theme", "Mörkt")
         self.apply_theme(saved_theme)
 
@@ -384,10 +423,39 @@ class IdeviceGUITool(QMainWindow):
                 return tab, i
         return None, -1
 
+    def _tab_icon(self, name):
+        """Return a visible Qt icon without depending on an installed icon theme."""
+        icon_map = {
+            "ideviceinfo": QStyle.SP_MessageBoxInformation,
+            "idevicediagnostics": QStyle.SP_ComputerIcon,
+            "idevicebackup2": QStyle.SP_DriveHDIcon,
+            "ideviceprovision": QStyle.SP_DialogApplyButton,
+            "idevicerestore": QStyle.SP_BrowserReload,
+            "ideviceimagemounter": QStyle.SP_DriveCDIcon,
+            "idevicecrashreport": QStyle.SP_MessageBoxCritical,
+            "idevicesyslog": QStyle.SP_ComputerIcon,
+            "idevicepair": QStyle.SP_DialogYesButton,
+            "ideviceactivation": QStyle.SP_DialogApplyButton,
+            "idevicedebug": QStyle.SP_ToolBarHorizontalExtensionButton,
+            "idevicename": QStyle.SP_FileDialogInfoView,
+            "idevicedate": QStyle.SP_FileDialogDetailedView,
+            "idevicescreenshot": QStyle.SP_DesktopIcon,
+            "idevicesetlocation": QStyle.SP_DialogOpenButton,
+            "idevicenotificationproxy": QStyle.SP_MessageBoxInformation,
+            "idevice_id": QStyle.SP_FileDialogContentsView,
+            "idevicedebugserverproxy": QStyle.SP_DriveNetIcon,
+            "irecovery": QStyle.SP_MediaStop,
+            "Om": QStyle.SP_MessageBoxInformation,
+        }
+        return self.style().standardIcon(icon_map.get(name, QStyle.SP_ComputerIcon))
+
     def _create_and_setup_tab(self, name, icon_name="phone"):
         tab = QWidget()
-        # The name will be set by retranslate_ui
-        self.tabs.addTab(tab, self._get_icon(icon_name), name)
+        # Use Qt's built-in icons first; this works even without a desktop icon theme.
+        icon = self._tab_icon(name) if name != "phone" else self._get_icon(icon_name)
+        index = self.tabs.addTab(tab, icon, name)
+        # Keep the full command name available even when the tab text is elided.
+        self.tabs.setTabToolTip(index, f"{name}  |  libimobiledevice")
         tab.process = QProcess(self)
         tab.setObjectName(name) # Store key for translation
         return tab
@@ -503,6 +571,7 @@ class IdeviceGUITool(QMainWindow):
         self.themes_menu.setTitle(self.get_string("themes_menu"))
         self.lang_menu.setTitle(self.get_string("lang_menu"))
         self.output_group.setTitle(self.get_string("terminal_group"))
+        self.save_output_action.setText(self.get_string("save_output_title"))
         self.run_button.setText(self.get_string("run_button"))
         self.abort_button.setText(self.get_string("abort_button"))
         self.clear_output_button.setText(self.get_string("clear_button"))
@@ -510,7 +579,9 @@ class IdeviceGUITool(QMainWindow):
         for i in range(self.tabs.count()):
             tab = self.tabs.widget(i)
             key = tab.objectName()
-            self.tabs.setTabText(i, self.get_string(key, default=key))
+            translated_name = self.get_string(key, default=key)
+            self.tabs.setTabText(i, translated_name)
+            self.tabs.setTabToolTip(i, f"{key}  |  {translated_name}")
             if hasattr(tab, 'retranslate'):
                 tab.retranslate()
         self.update_ui_for_current_tab()
